@@ -1,0 +1,8 @@
+{
+  "name": "ExpenseTrack",
+  "description": "A premium, professional SaaS Expense Tracker with multi-location financial analytics, category budgeting, real-time transaction management, and reports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
