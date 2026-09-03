@@ -15,7 +15,7 @@ import categoriesRoutes from './server/routes/categories.routes';
 
 async function startServer() {
   const app = express();
-  const PORT = parseInt(process.env.PORT || '3000', 10);
+  const PORT = 3000;
 
   // Initialize DB & schema
   await initializeDatabase();
