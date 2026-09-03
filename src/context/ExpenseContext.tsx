@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, ReactNode, useCallback } from 'react';
 import { Expense, LocationData, CurrencyCode, ExpenseCategory, ExpenseFilter, ActiveTab } from '../types';
-import { INITIAL_EXPENSES, INITIAL_LOCATIONS, CURRENCY_CONFIGS } from '../data/initialData';
+import { CURRENCY_CONFIGS } from '../data/initialData';
 import { useAuth } from './AuthContext';
+import { expensesAPI, locationsAPI } from '../services/api';
 
 export interface ToastMessage {
   id: string;
@@ -30,21 +31,23 @@ interface ExpenseContextType {
   currency: CurrencyCode;
   stats: ExpenseStats;
   toasts: ToastMessage[];
+  isLoadingData: boolean;
+  refreshData: () => Promise<void>;
   setActiveTab: (tab: ActiveTab) => void;
   setFilters: React.Dispatch<React.SetStateAction<ExpenseFilter>>;
   resetFilters: () => void;
   setCurrency: (curr: CurrencyCode) => void;
-  addExpense: (expense: Omit<Expense, 'id' | 'userId' | 'createdAt' | 'updatedAt'>) => Expense;
-  updateExpense: (id: string, expense: Partial<Omit<Expense, 'id' | 'userId' | 'createdAt'>>) => void;
-  deleteExpense: (id: string) => void;
-  bulkDeleteExpenses: (ids: string[]) => void;
-  addLocation: (location: Omit<LocationData, 'id'>) => LocationData;
-  updateLocation: (id: string, location: Partial<LocationData>) => void;
-  deleteLocation: (id: string) => void;
+  addExpense: (expense: Omit<Expense, 'id' | 'userId' | 'createdAt' | 'updatedAt'>) => Promise<Expense | null>;
+  updateExpense: (id: string, expense: Partial<Omit<Expense, 'id' | 'userId' | 'createdAt'>>) => Promise<void>;
+  deleteExpense: (id: string) => Promise<void>;
+  bulkDeleteExpenses: (ids: string[]) => Promise<void>;
+  addLocation: (location: Omit<LocationData, 'id'>) => Promise<LocationData | null>;
+  updateLocation: (id: string, location: Partial<LocationData>) => Promise<void>;
+  deleteLocation: (id: string) => Promise<void>;
   formatCurrency: (amount: number, overrideCurrency?: CurrencyCode) => string;
   showToast: (title: string, message?: string, type?: 'success' | 'error' | 'info') => void;
   removeToast: (id: string) => void;
-  resetToSampleData: () => void;
+  resetToSampleData: () => Promise<void>;
   exportToCSV: (customList?: Expense[]) => void;
   isExpenseModalOpen: boolean;
   setIsExpenseModalOpen: (open: boolean) => void;
@@ -66,17 +69,14 @@ const DEFAULT_FILTERS: ExpenseFilter = {
 const ExpenseContext = createContext<ExpenseContextType | undefined>(undefined);
 
 export const ExpenseProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const { currentUser, updateProfile } = useAuth();
-  
-  const userStoragePrefix = useMemo(() => {
-    return currentUser ? `expensetrack_data_${currentUser.id}` : 'expensetrack_data_guest';
-  }, [currentUser]);
+  const { currentUser, updateProfile, isAuthenticated } = useAuth();
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
   const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [locations, setLocations] = useState<LocationData[]>(INITIAL_LOCATIONS);
+  const [locations, setLocations] = useState<LocationData[]>([]);
   const [filters, setFilters] = useState<ExpenseFilter>(DEFAULT_FILTERS);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
   
   // Modal states
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
@@ -85,74 +85,52 @@ export const ExpenseProvider: React.FC<{ children: ReactNode }> = ({ children })
 
   const currency = currentUser?.currency || 'INR';
 
-  // Load user-specific expenses & locations from storage
-  useEffect(() => {
-    if (!currentUser) {
-      setExpenses([]);
-      return;
-    }
-
-    try {
-      const expKey = `${userStoragePrefix}_expenses`;
-      const locKey = `${userStoragePrefix}_locations`;
-
-      const storedExp = localStorage.getItem(expKey);
-      const storedLoc = localStorage.getItem(locKey);
-
-      if (storedExp) {
-        setExpenses(JSON.parse(storedExp));
-      } else {
-        // Initialize with default dataset for demo user or sample starter
-        const seeded: Expense[] = INITIAL_EXPENSES.map(e => ({
-          ...e,
-          userId: currentUser.id,
-        }));
-        setExpenses(seeded);
-        localStorage.setItem(expKey, JSON.stringify(seeded));
-      }
-
-      if (storedLoc) {
-        setLocations(JSON.parse(storedLoc));
-      } else {
-        setLocations(INITIAL_LOCATIONS);
-        localStorage.setItem(locKey, JSON.stringify(INITIAL_LOCATIONS));
-      }
-    } catch (e) {
-      console.error('Failed to parse stored expenses:', e);
-      setExpenses(INITIAL_EXPENSES);
-      setLocations(INITIAL_LOCATIONS);
-    }
-  }, [currentUser, userStoragePrefix]);
-
-  // Helper to persist expenses
-  const saveExpenses = (newExpenses: Expense[]) => {
-    setExpenses(newExpenses);
-    if (currentUser) {
-      localStorage.setItem(`${userStoragePrefix}_expenses`, JSON.stringify(newExpenses));
-    }
-  };
-
-  // Helper to persist locations
-  const saveLocations = (newLocations: LocationData[]) => {
-    setLocations(newLocations);
-    if (currentUser) {
-      localStorage.setItem(`${userStoragePrefix}_locations`, JSON.stringify(newLocations));
-    }
-  };
-
-  const showToast = (title: string, message?: string, type: 'success' | 'error' | 'info' = 'success') => {
+  const showToast = useCallback((title: string, message?: string, type: 'success' | 'error' | 'info' = 'success') => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`;
     setToasts(prev => [...prev, { id, title, message, type }]);
 
-    // Auto-dismiss after 4 seconds
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 4000);
-  };
+  }, []);
 
   const removeToast = (id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));
   };
+
+  // Load user data directly from MySQL API
+  const refreshData = useCallback(async () => {
+    if (!isAuthenticated) {
+      setExpenses([]);
+      setLocations([]);
+      return;
+    }
+
+    try {
+      setIsLoadingData(true);
+      const [locationsRes, expensesRes] = await Promise.all([
+        locationsAPI.getAll(),
+        expensesAPI.getAll({ limit: 200 })
+      ]);
+
+      setLocations(locationsRes || []);
+      setExpenses(expensesRes.data || []);
+    } catch (err: any) {
+      console.error('Failed to fetch data from backend API:', err);
+      showToast('Data Synchronization Error', err.message, 'error');
+    } finally {
+      setIsLoadingData(false);
+    }
+  }, [isAuthenticated, showToast]);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      refreshData();
+    } else {
+      setExpenses([]);
+      setLocations([]);
+    }
+  }, [isAuthenticated, refreshData]);
 
   const resetFilters = () => {
     setFilters(DEFAULT_FILTERS);
@@ -170,7 +148,6 @@ export const ExpenseProvider: React.FC<{ children: ReactNode }> = ({ children })
     const activeCurr = overrideCurrency || currency;
     const config = CURRENCY_CONFIGS[activeCurr] || CURRENCY_CONFIGS.INR;
 
-    // Use Intl NumberFormat for high precision localized rendering
     try {
       return new Intl.NumberFormat(activeCurr === 'INR' ? 'en-IN' : 'en-US', {
         style: 'currency',
@@ -182,98 +159,91 @@ export const ExpenseProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
   };
 
-  // Add Expense
-  const addExpense = (expenseData: Omit<Expense, 'id' | 'userId' | 'createdAt' | 'updatedAt'>): Expense => {
-    const newExpense: Expense = {
-      ...expenseData,
-      id: `exp-${Date.now()}`,
-      userId: currentUser?.id || 'usr-default',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      receiptNumber: expenseData.receiptNumber || `REC-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
-      status: expenseData.status || 'Approved',
-    };
-
-    const updated = [newExpense, ...expenses];
-    saveExpenses(updated);
-    showToast('Expense Recorded', `Added "${newExpense.name}" for ${formatCurrency(newExpense.amount)}`, 'success');
-    return newExpense;
-  };
-
-  // Update Expense
-  const updateExpense = (id: string, updatedFields: Partial<Omit<Expense, 'id' | 'userId' | 'createdAt'>>) => {
-    const updated = expenses.map(item => {
-      if (item.id === id) {
-        return {
-          ...item,
-          ...updatedFields,
-          updatedAt: new Date().toISOString(),
-        };
-      }
-      return item;
-    });
-
-    saveExpenses(updated);
-    showToast('Expense Updated', 'Transaction details were updated successfully.', 'success');
-  };
-
-  // Delete Expense
-  const deleteExpense = (id: string) => {
-    const target = expenses.find(e => e.id === id);
-    const updated = expenses.filter(item => item.id !== id);
-    saveExpenses(updated);
-    showToast('Expense Removed', target ? `Deleted "${target.name}"` : 'Expense was removed.', 'info');
-  };
-
-  // Bulk Delete
-  const bulkDeleteExpenses = (ids: string[]) => {
-    const count = ids.length;
-    const updated = expenses.filter(item => !ids.includes(item.id));
-    saveExpenses(updated);
-    showToast('Batch Delete Completed', `Removed ${count} transactions.`, 'info');
-  };
-
-  // Add Location
-  const addLocation = (locData: Omit<LocationData, 'id'>): LocationData => {
-    const newLoc: LocationData = {
-      ...locData,
-      id: `loc-${Date.now()}`,
-    };
-    const updated = [...locations, newLoc];
-    saveLocations(updated);
-    showToast('Location Added', `Branch office "${newLoc.name}" has been registered.`, 'success');
-    return newLoc;
-  };
-
-  // Update Location
-  const updateLocation = (id: string, updatedFields: Partial<LocationData>) => {
-    const updated = locations.map(l => (l.id === id ? { ...l, ...updatedFields } : l));
-    saveLocations(updated);
-    showToast('Location Updated', 'Branch settings updated.', 'success');
-  };
-
-  // Delete Location
-  const deleteLocation = (id: string) => {
-    const loc = locations.find(l => l.id === id);
-    if (loc?.isDefault) {
-      showToast('Action Disallowed', 'Default corporate hub locations cannot be deleted.', 'error');
-      return;
+  // Add Expense - Connected to POST /api/expenses
+  const addExpense = async (expenseData: Omit<Expense, 'id' | 'userId' | 'createdAt' | 'updatedAt'>): Promise<Expense | null> => {
+    try {
+      const created = await expensesAPI.create(expenseData);
+      setExpenses(prev => [created, ...prev]);
+      showToast('Expense Recorded', `Added "${created.name}" for ${formatCurrency(created.amount)}`, 'success');
+      return created;
+    } catch (err: any) {
+      showToast('Error Adding Expense', err.message || 'Server error', 'error');
+      return null;
     }
-    const updated = locations.filter(l => l.id !== id);
-    saveLocations(updated);
-    showToast('Location Removed', `Branch removed.`, 'info');
   };
 
-  // Reset to Sample Data
-  const resetToSampleData = () => {
-    if (!currentUser) return;
-    const seeded: Expense[] = INITIAL_EXPENSES.map(e => ({
-      ...e,
-      userId: currentUser.id,
-    }));
-    saveExpenses(seeded);
-    saveLocations(INITIAL_LOCATIONS);
-    showToast('Reset Complete', 'Sample enterprise transactions have been restored.', 'info');
+  // Update Expense - Connected to PUT /api/expenses/:id
+  const updateExpense = async (id: string, updatedFields: Partial<Omit<Expense, 'id' | 'userId' | 'createdAt'>>) => {
+    try {
+      const updated = await expensesAPI.update(id, updatedFields);
+      setExpenses(prev => prev.map(item => (item.id === id ? updated : item)));
+      showToast('Expense Updated', 'Transaction details updated in database.', 'success');
+    } catch (err: any) {
+      showToast('Update Failed', err.message, 'error');
+    }
+  };
+
+  // Delete Expense - Connected to DELETE /api/expenses/:id
+  const deleteExpense = async (id: string) => {
+    try {
+      await expensesAPI.delete(id);
+      setExpenses(prev => prev.filter(item => item.id !== id));
+      showToast('Expense Removed', 'Expense was permanently deleted.', 'info');
+    } catch (err: any) {
+      showToast('Delete Failed', err.message, 'error');
+    }
+  };
+
+  // Bulk Delete - Connected to POST /api/expenses/bulk-delete
+  const bulkDeleteExpenses = async (ids: string[]) => {
+    try {
+      await expensesAPI.bulkDelete(ids);
+      setExpenses(prev => prev.filter(item => !ids.includes(item.id)));
+      showToast('Batch Delete Completed', `Removed ${ids.length} transactions.`, 'info');
+    } catch (err: any) {
+      showToast('Bulk Delete Failed', err.message, 'error');
+    }
+  };
+
+  // Add Location - Connected to POST /api/locations
+  const addLocation = async (locData: Omit<LocationData, 'id'>): Promise<LocationData | null> => {
+    try {
+      const created = await locationsAPI.create(locData);
+      setLocations(prev => [...prev, created]);
+      showToast('Location Added', `Branch office "${created.name}" has been registered in database.`, 'success');
+      return created;
+    } catch (err: any) {
+      showToast('Error Adding Location', err.message, 'error');
+      return null;
+    }
+  };
+
+  // Update Location - Connected to PUT /api/locations/:id
+  const updateLocation = async (id: string, updatedFields: Partial<LocationData>) => {
+    try {
+      const updated = await locationsAPI.update(id, updatedFields);
+      setLocations(prev => prev.map(l => (l.id === id ? updated : l)));
+      showToast('Location Updated', 'Branch settings updated.', 'success');
+    } catch (err: any) {
+      showToast('Update Failed', err.message, 'error');
+    }
+  };
+
+  // Delete Location - Connected to DELETE /api/locations/:id
+  const deleteLocation = async (id: string) => {
+    try {
+      await locationsAPI.delete(id);
+      setLocations(prev => prev.filter(l => l.id !== id));
+      showToast('Location Removed', 'Branch office removed from database.', 'info');
+    } catch (err: any) {
+      showToast('Delete Failed', err.message, 'error');
+    }
+  };
+
+  // Reset data
+  const resetToSampleData = async () => {
+    await refreshData();
+    showToast('Data Refreshed', 'Latest data loaded from database.', 'info');
   };
 
   // Export to CSV
@@ -284,17 +254,16 @@ export const ExpenseProvider: React.FC<{ children: ReactNode }> = ({ children })
       return;
     }
 
-    const headers = ['Receipt #', 'Date', 'Expense Name', 'Category', 'Location', 'Amount', 'Payment Method', 'Status', 'Tax Deductible', 'Description'];
+    const headers = ['Date', 'Expense Name', 'Category', 'Location', 'Amount', 'Payment Method', 'Status', 'Tax Deductible', 'Description'];
     const rows = listToExport.map(e => [
-      `"${e.receiptNumber || ''}"`,
       `"${e.date}"`,
       `"${e.name.replace(/"/g, '""')}"`,
       `"${e.category}"`,
       `"${e.location}"`,
       e.amount,
       `"${e.paymentMethod}"`,
-      `"${e.status || 'Approved'}"`,
-      e.isTaxDeductible ? 'Yes' : 'No',
+      `"${e.status || 'approved'}"`,
+      (e.isTaxDeductible ?? (e as any).taxDeductible) ? 'Yes' : 'No',
       `"${(e.description || '').replace(/"/g, '""')}"`,
     ]);
 
@@ -315,12 +284,10 @@ export const ExpenseProvider: React.FC<{ children: ReactNode }> = ({ children })
     const now = new Date();
     const todayStr = now.toISOString().split('T')[0];
     
-    // Start of this week (Monday)
     const currentDay = now.getDay();
     const diffToMonday = now.getDate() - currentDay + (currentDay === 0 ? -6 : 1);
     const startOfWeek = new Date(now.setDate(diffToMonday)).toISOString().split('T')[0];
     
-    // Reset now
     const nowRef = new Date();
     const currentMonthStr = `${nowRef.getFullYear()}-${String(nowRef.getMonth() + 1).padStart(2, '0')}`;
     const currentQuarter = Math.floor(nowRef.getMonth() / 3);
@@ -332,9 +299,8 @@ export const ExpenseProvider: React.FC<{ children: ReactNode }> = ({ children })
         const query = filters.search.toLowerCase().trim();
         const matchesName = exp.name.toLowerCase().includes(query);
         const matchesDesc = (exp.description || '').toLowerCase().includes(query);
-        const matchesReceipt = (exp.receiptNumber || '').toLowerCase().includes(query);
         const matchesLoc = exp.location.toLowerCase().includes(query);
-        if (!matchesName && !matchesDesc && !matchesReceipt && !matchesLoc) {
+        if (!matchesName && !matchesDesc && !matchesLoc) {
           return false;
         }
       }
@@ -482,6 +448,8 @@ export const ExpenseProvider: React.FC<{ children: ReactNode }> = ({ children })
         currency,
         stats,
         toasts,
+        isLoadingData,
+        refreshData,
         setActiveTab,
         setFilters,
         resetFilters,

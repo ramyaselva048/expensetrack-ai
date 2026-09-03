@@ -34,7 +34,7 @@ export const AuthPage: React.FC = () => {
   const [authError, setAuthError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
 
@@ -51,9 +51,9 @@ export const AuthPage: React.FC = () => {
 
     setIsLoading(true);
 
-    setTimeout(() => {
+    try {
       if (isLoginMode) {
-        const result = login(email, password);
+        const result = await login(email, password);
         if (!result.success) {
           setAuthError(result.message || 'Invalid email or password.');
           setIsLoading(false);
@@ -67,7 +67,7 @@ export const AuthPage: React.FC = () => {
           return;
         }
 
-        const result = signup({
+        const result = await signup({
           name,
           email,
           password,
@@ -82,15 +82,21 @@ export const AuthPage: React.FC = () => {
           showToast('Account Created!', 'Your enterprise workspace is ready.', 'success');
         }
       }
-    }, 400);
+    } catch (err: any) {
+      setAuthError(err.message || 'Authentication error.');
+      setIsLoading(false);
+    }
   };
 
-  const handleQuickDemoLogin = () => {
+  const handleQuickDemoLogin = async () => {
     setIsLoading(true);
-    setTimeout(() => {
-      loginAsDemo();
+    try {
+      await loginAsDemo();
       showToast('Demo Access Granted', 'Logged in as Alex Sterling (Chief Financial Officer).', 'success');
-    }, 300);
+    } catch (err: any) {
+      setAuthError(err.message || 'Demo login failed.');
+      setIsLoading(false);
+    }
   };
 
   return (

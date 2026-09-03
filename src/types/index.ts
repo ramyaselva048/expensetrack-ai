@@ -46,13 +46,26 @@ export interface Expense {
 
 export interface LocationData {
   id: string;
+  userId?: string;
   name: string;
   code: string;
   state: string;
   description: string;
   color: string;
-  isDefault: boolean;
+  isDefault?: boolean;
   budgetLimit?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type Location = LocationData;
+
+export interface Category {
+  id: string;
+  userId?: string;
+  name: string;
+  budgetLimit: number;
+  color: string;
 }
 
 export interface UserProfile {

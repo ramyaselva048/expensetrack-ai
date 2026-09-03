@@ -1,32 +1,29 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { UserProfile, CurrencyCode } from '../types';
+import { UserProfile } from '../types';
+import { authAPI, getStoredToken } from '../services/api';
 
 interface AuthContextType {
   currentUser: UserProfile | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (email: string, password?: string) => { success: boolean; message?: string };
-  loginAsDemo: () => void;
-  signup: (userData: { name: string; email: string; password?: string; role?: string; companyName?: string }) => { success: boolean; message?: string };
+  login: (email: string, password?: string) => Promise<{ success: boolean; message?: string }>;
+  loginAsDemo: () => Promise<void>;
+  signup: (userData: { name: string; email: string; password?: string; role?: string; companyName?: string }) => Promise<{ success: boolean; message?: string }>;
   logout: () => void;
   updateProfile: (updatedData: Partial<UserProfile>) => void;
 }
 
-export const DEMO_USER: UserProfile & { password?: string } = {
+export const DEMO_USER: UserProfile = {
   id: 'demo-user-1',
   name: 'Alex Sterling',
   email: 'alex.sterling@expensetrack.io',
-  password: 'demo',
   role: 'Chief Financial Officer',
   companyName: 'Apex Enterprise Technologies',
   avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
   currency: 'INR',
   monthlyBudget: 250000,
-  joinedDate: '2025-01-15',
+  joinedDate: '2026-01-15',
 };
-
-const USERS_STORAGE_KEY = 'expensetrack_users_v1';
-const SESSION_STORAGE_KEY = 'expensetrack_session_v1';
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -34,129 +31,127 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  // Initialize from LocalStorage
+  // Initialize and check persistent JWT session from backend
   useEffect(() => {
-    try {
-      // Ensure demo user is seeded in registered users list
-      const storedUsersRaw = localStorage.getItem(USERS_STORAGE_KEY);
-      let users: (UserProfile & { password?: string })[] = storedUsersRaw ? JSON.parse(storedUsersRaw) : [];
-      
-      const demoExists = users.some(u => u.email.toLowerCase() === DEMO_USER.email.toLowerCase());
-      if (!demoExists) {
-        users.push(DEMO_USER);
-        localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
+    async function checkSession() {
+      const token = getStoredToken();
+      if (!token) {
+        setCurrentUser(null);
+        setIsLoading(false);
+        return;
       }
 
-      // Check current session
-      const storedSession = localStorage.getItem(SESSION_STORAGE_KEY);
-      if (storedSession) {
-        const parsedSession: UserProfile = JSON.parse(storedSession);
-        // Refresh with latest saved user profile data
-        const matched = users.find(u => u.id === parsedSession.id) || parsedSession;
-        setCurrentUser(matched);
-      } else {
-        // When user first opens the site, do NOT show dashboard before login. First page shown is Login / Signup!
+      try {
+        const res = await authAPI.getMe();
+        if (res.success && res.user) {
+          setCurrentUser({
+            id: res.user.id,
+            name: res.user.name,
+            email: res.user.email,
+            role: res.user.role || 'Finance Manager',
+            companyName: res.user.companyName || 'Enterprise Technologies',
+            avatarUrl: res.user.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+            currency: (res.user.currency as any) || 'INR',
+            monthlyBudget: 250000,
+            joinedDate: new Date().toISOString().split('T')[0]
+          });
+        } else {
+          setCurrentUser(null);
+        }
+      } catch (err) {
+        console.warn('Session verification failed, logging out:', err);
+        authAPI.logout();
         setCurrentUser(null);
+      } finally {
+        setIsLoading(false);
       }
-    } catch (e) {
-      console.error('Error loading auth session:', e);
-      setCurrentUser(null);
-    } finally {
-      setIsLoading(false);
     }
+
+    checkSession();
+
+    // Listen to unauthorized 401 events dispatched by API client
+    const handleUnauthorized = () => {
+      setCurrentUser(null);
+    };
+    window.addEventListener('expensetrack:unauthorized', handleUnauthorized);
+    return () => window.removeEventListener('expensetrack:unauthorized', handleUnauthorized);
   }, []);
 
-  const login = (email: string, password?: string): { success: boolean; message?: string } => {
+  const login = async (email: string, password = ''): Promise<{ success: boolean; message?: string }> => {
     try {
-      const storedUsersRaw = localStorage.getItem(USERS_STORAGE_KEY);
-      const users: (UserProfile & { password?: string })[] = storedUsersRaw ? JSON.parse(storedUsersRaw) : [DEMO_USER];
-      
-      const normalizedEmail = email.trim().toLowerCase();
-      const user = users.find(u => u.email.toLowerCase() === normalizedEmail);
-
-      if (!user) {
-        return { success: false, message: 'No registered account found with this email. Please sign up.' };
+      const res = await authAPI.login({ email, password });
+      if (res.success && res.user) {
+        const profile: UserProfile = {
+          id: res.user.id,
+          name: res.user.name,
+          email: res.user.email,
+          role: res.user.role || 'Finance Manager',
+          companyName: res.user.companyName || 'Enterprise Technologies',
+          avatarUrl: res.user.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+          currency: (res.user.currency as any) || 'INR',
+          monthlyBudget: 250000,
+          joinedDate: new Date().toISOString().split('T')[0]
+        };
+        setCurrentUser(profile);
+        return { success: true };
       }
-
-      // If user has a password set, verify it
-      if (user.password && password && user.password !== password) {
-        return { success: false, message: 'Invalid password. Please check your credentials.' };
-      }
-
-      setCurrentUser(user);
-      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user));
-      return { success: true };
-    } catch (e) {
-      return { success: false, message: 'An error occurred while signing in.' };
+      return { success: false, message: res.message || 'Login failed.' };
+    } catch (e: any) {
+      return { success: false, message: e.message || 'An error occurred during authentication.' };
     }
   };
 
-  const loginAsDemo = () => {
-    setCurrentUser(DEMO_USER);
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(DEMO_USER));
+  const loginAsDemo = async () => {
+    await login('alex.sterling@expensetrack.io', 'demo');
   };
 
-  const signup = (userData: { name: string; email: string; password?: string; role?: string; companyName?: string }): { success: boolean; message?: string } => {
+  const signup = async (userData: {
+    name: string;
+    email: string;
+    password?: string;
+    role?: string;
+    companyName?: string;
+  }): Promise<{ success: boolean; message?: string }> => {
     try {
-      const storedUsersRaw = localStorage.getItem(USERS_STORAGE_KEY);
-      const users: (UserProfile & { password?: string })[] = storedUsersRaw ? JSON.parse(storedUsersRaw) : [DEMO_USER];
-      
-      const normalizedEmail = userData.email.trim().toLowerCase();
-      if (users.some(u => u.email.toLowerCase() === normalizedEmail)) {
-        return { success: false, message: 'An account with this email already exists. Please log in.' };
+      const res = await authAPI.register({
+        name: userData.name,
+        email: userData.email,
+        password: userData.password || 'password123',
+        companyName: userData.companyName,
+        role: userData.role,
+        currency: 'INR'
+      });
+
+      if (res.success && res.user) {
+        const profile: UserProfile = {
+          id: res.user.id,
+          name: res.user.name,
+          email: res.user.email,
+          role: res.user.role || 'Finance Manager',
+          companyName: res.user.companyName || userData.companyName || 'Enterprise Technologies',
+          avatarUrl: res.user.avatarUrl,
+          currency: 'INR',
+          monthlyBudget: 200000,
+          joinedDate: new Date().toISOString().split('T')[0]
+        };
+        setCurrentUser(profile);
+        return { success: true };
       }
-
-      const newUser: UserProfile & { password?: string } = {
-        id: `usr-${Date.now()}`,
-        name: userData.name.trim(),
-        email: normalizedEmail,
-        password: userData.password,
-        role: userData.role || 'Finance Manager',
-        companyName: userData.companyName || 'My Organization',
-        avatarUrl: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(userData.name)}`,
-        currency: 'INR',
-        monthlyBudget: 200000,
-        joinedDate: new Date().toISOString().split('T')[0],
-      };
-
-      users.push(newUser);
-      localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
-
-      // Auto log in new user upon signup
-      setCurrentUser(newUser);
-      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(newUser));
-
-      return { success: true };
-    } catch (e) {
-      return { success: false, message: 'Could not complete registration. Please try again.' };
+      return { success: false, message: res.message || 'Registration failed.' };
+    } catch (e: any) {
+      return { success: false, message: e.message || 'Could not complete registration.' };
     }
   };
 
   const logout = () => {
+    authAPI.logout();
     setCurrentUser(null);
-    localStorage.removeItem(SESSION_STORAGE_KEY);
   };
 
   const updateProfile = (updatedData: Partial<UserProfile>) => {
     if (!currentUser) return;
     const updated: UserProfile = { ...currentUser, ...updatedData };
     setCurrentUser(updated);
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(updated));
-
-    // Update in all users list
-    try {
-      const storedUsersRaw = localStorage.getItem(USERS_STORAGE_KEY);
-      if (storedUsersRaw) {
-        const users: UserProfile[] = JSON.parse(storedUsersRaw);
-        const idx = users.findIndex(u => u.id === currentUser.id);
-        if (idx !== -1) {
-          users[idx] = { ...users[idx], ...updatedData };
-          localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
-        }
-      }
-    } catch (e) {
-      console.error('Failed to sync updated user in storage', e);
-    }
   };
 
   return (
