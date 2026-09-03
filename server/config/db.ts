@@ -156,8 +156,8 @@ export async function initializeDatabase(): Promise<boolean> {
       const schemaSql = fs.readFileSync(schemaPath, 'utf-8');
       const statements = schemaSql
         .split(';')
-        .map(s => s.trim())
-        .filter(s => s.length > 0 && !s.startsWith('--') && !s.toLowerCase().startsWith('use ') && !s.toLowerCase().startsWith('create database'));
+        .map(s => s.replace(/--.*$/gm, '').trim())
+        .filter(s => s.length > 0 && !s.toLowerCase().startsWith('use ') && !s.toLowerCase().startsWith('create database'));
 
       for (const statement of statements) {
         try {

@@ -148,10 +148,22 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setCurrentUser(null);
   };
 
-  const updateProfile = (updatedData: Partial<UserProfile>) => {
+  const updateProfile = async (updatedData: Partial<UserProfile>) => {
     if (!currentUser) return;
     const updated: UserProfile = { ...currentUser, ...updatedData };
     setCurrentUser(updated);
+
+    try {
+      await authAPI.updateProfile({
+        name: updatedData.name,
+        companyName: updatedData.companyName,
+        currency: updatedData.currency,
+        role: updatedData.role,
+        avatarUrl: updatedData.avatarUrl
+      });
+    } catch (err) {
+      console.error('Failed to sync profile update to MySQL:', err);
+    }
   };
 
   return (

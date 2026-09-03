@@ -20,7 +20,12 @@ async function startServer() {
   await initializeDatabase();
 
   // Basic Middlewares
-  app.use(cors());
+  app.use(cors({
+    origin: true,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
+  }));
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -57,6 +62,14 @@ async function startServer() {
   app.use('/api/dashboard', dashboardRoutes);
   app.use('/api/reports', reportsRoutes);
   app.use('/api/categories', categoriesRoutes);
+
+  // 404 for unhandled API routes
+  app.use('/api', (req, res, next) => {
+    res.status(404).json({
+      success: false,
+      message: `API endpoint ${req.method} ${req.originalUrl} not found.`
+    });
+  });
 
   // Global API Error Handler
   app.use('/api', (err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {

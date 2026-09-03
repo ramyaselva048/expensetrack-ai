@@ -103,6 +103,13 @@ export const authAPI = {
     return request<{ success: boolean; user: any }>('/auth/me');
   },
 
+  async updateProfile(data: { name?: string; companyName?: string; currency?: string; role?: string; avatarUrl?: string }) {
+    return request<{ success: boolean; message: string; user: any }>('/auth/profile', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  },
+
   logout() {
     removeStoredToken();
   }

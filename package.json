@@ -3,6 +3,10 @@
   "private": true,
   "version": "1.0.0",
   "description": "Enterprise Multi-Location Expense Management System",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -27,8 +31,7 @@
     "mysql2": "^3.24.3",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
-    "recharts": "^3.10.1",
-    "vite": "^6.2.3"
+    "recharts": "^3.10.1"
   },
   "devDependencies": {
     "@types/bcryptjs": "^3.0.0",

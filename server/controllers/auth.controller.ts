@@ -238,3 +238,53 @@ export async function getCurrentUser(req: AuthenticatedRequest, res: Response): 
     res.status(500).json({ success: false, message: 'Server error retrieving profile.' });
   }
 }
+
+export async function updateProfile(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      res.status(401).json({ success: false, message: 'Unauthorized' });
+      return;
+    }
+
+    const { name, companyName, currency, role, avatarUrl } = req.body;
+    const pool = getPool();
+
+    const [existing]: any = await pool.query('SELECT * FROM users WHERE id = ? LIMIT 1', [userId]);
+    if (!existing || existing.length === 0) {
+      res.status(404).json({ success: false, message: 'User not found in MySQL.' });
+      return;
+    }
+
+    const prev = existing[0];
+    const newName = name !== undefined ? name.trim() : prev.name;
+    const newCompany = companyName !== undefined ? companyName.trim() : prev.company_name;
+    const newCurrency = currency !== undefined ? currency.trim() : prev.currency;
+    const newRole = role !== undefined ? role.trim() : prev.role;
+    const newAvatar = avatarUrl !== undefined ? avatarUrl : prev.avatar_url;
+
+    await pool.query(
+      `UPDATE users 
+       SET name = ?, company_name = ?, currency = ?, role = ?, avatar_url = ?, updated_at = NOW() 
+       WHERE id = ?`,
+      [newName, newCompany, newCurrency, newRole, newAvatar, userId]
+    );
+
+    res.json({
+      success: true,
+      message: 'Profile updated successfully in MySQL.',
+      user: {
+        id: userId,
+        name: newName,
+        email: prev.email,
+        role: newRole,
+        companyName: newCompany,
+        currency: newCurrency,
+        avatarUrl: newAvatar
+      }
+    });
+  } catch (error: any) {
+    console.error('[Auth Controller] Update profile error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update profile in MySQL.' });
+  }
+}
